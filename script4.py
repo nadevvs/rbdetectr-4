@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
-import re
+import re, ipaddress
 
 class C:
     RESET  = "\033[0m"
@@ -40,38 +40,69 @@ DefaultSettings = {
         "window_minutes": 5,
     }
 
-IP_RX = re.compile(r"\b\d{1,3}(\.\d{1,3}){3}\b")
-TS_RX = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}")  # "Jan  2 03:04:05"
+IP_RX = re.compile(r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]{2,})\b")
+TS_RX = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}")  
 
 FAILED_NEEDLE = "failed password"
+SSHD_NEEDLE = "sshd"
+FAIL_PATTERNS = (
+    "failed password",          # common
+    "invalid user",             # common
+    "authentication failure",   # PAM-style messages
+    "failed publickey",         # key-based failures
+)
 
 
 def extract_ip(line: str):
     m = IP_RX.search(line)
-    return m.group() if m else None
+
+    if not m:
+        return None
+
+    candidate = m.group()
+    candidate = candidate.strip("[](),;")
+
+    try:
+        ip_obj = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+
+    return str(ip_obj)
 
 
 def extract_ts(line: str, year: int):
     m = TS_RX.search(line)
+
     if not m:
         return None
+
     ts_str = m.group()
+
     try:
         dt = datetime.strptime(ts_str, "%b %d %H:%M:%S")
-        return dt.replace(year=year)
     except ValueError:
         return None
 
+    dt = dt.replace(year=year)
+    now = datetime.now()
+
+    if dt - now > timedelta(days=1):
+        dt = dt.replace(year=year - 1)
+
+    return dt
+
 
 def parse_failed_event(line: str, year: int):
-    """
-    Returns (ts, ip) if line looks like a failed SSH login event and we can parse it.
-    Otherwise returns None.
-    """
     s = line.strip()
     if not s:
         return None
-    if FAILED_NEEDLE not in s.lower():
+
+    lowered = s.lower()
+
+    if SSHD_NEEDLE not in lowered:
+        return None
+
+    if not any(pat in lowered for pat in FAIL_PATTERNS):
         return None
 
     ip = extract_ip(s)
@@ -88,9 +119,9 @@ def parse_failed_event(line: str, year: int):
 def detect_bruteforce(events, window_minutes: int, threshold: int):
     window = timedelta(minutes=window_minutes)
 
-    buckets = defaultdict(deque)  # ip -> deque[timestamps]
+    buckets = defaultdict(deque)  
     alerts = []
-    alerted = set()  # avoid repeated alerts per IP
+    alerted = set()  
 
     for ts, ip in events:
         q = buckets[ip]
@@ -113,7 +144,6 @@ def iter_events_from_paths(paths):
     for p in paths:
         path = Path(p)
         if not path.exists() or not path.is_file():
-            # You can replace prints with warn(...) if you have it
             print(f"[WARN] Missing or not a file: {path}")
             continue
 
