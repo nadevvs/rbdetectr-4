@@ -13,7 +13,6 @@ lightweight, interactive, host-based log analysis tool for detecting unusual act
 ---
 
 ## To list commands type 'help' in console
-addpath, default, delpath, help, q, quit, setmode, setthreshold, setwindow, show, start
 - addpath: adds a new log file location
 - default: sets defaul settings of a tool
 - delpath: deletes provided log file location
